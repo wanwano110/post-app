@@ -123,13 +123,38 @@
     margin-top: 4px;
   }
 
-  .file-name {
+  .file-list {
     margin-top: 10px;
+    text-align: left;
+  }
+
+  .file-list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     font-size: 13px;
     color: var(--green);
     font-weight: 700;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--green-pale);
     word-break: break-all;
+    gap: 8px;
   }
+
+  .file-list-item:last-child { border-bottom: none; }
+
+  .remove-btn {
+    width: auto;
+    background: none;
+    color: #c0392b;
+    font-size: 16px;
+    padding: 0 4px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  .remove-btn:hover { background: #fde8e8; }
 
   button {
     width: 100%;
@@ -207,12 +232,12 @@
     <input type="password" id="password" placeholder="0000" maxlength="20" autocomplete="off">
 
     <div class="drop-area" id="dropArea">
-      <input type="file" id="fileInput">
+      <input type="file" id="fileInput" multiple>
       <div class="drop-icon">📁</div>
       <div class="drop-text">ファイルをここに置く</div>
-      <div class="drop-sub">またはクリックして選択</div>
-      <div class="file-name" id="fileName"></div>
+      <div class="drop-sub">複数ファイルを同時に選択できます</div>
     </div>
+    <div class="file-list" id="fileList"></div>
 
     <button id="submitBtn" onclick="submitFile()" disabled>投函する 📬</button>
     <div class="progress-wrap" id="progressWrap">
@@ -229,7 +254,7 @@ const GAS_URL = 'https://script.google.com/macros/s/AKfycbwWtbXPW_qMSRleohR6XewZ
 const ALLOWED_EXT = ['mcworld','mkcd','jpg','jpeg','png','mp3','mp4','pdf','zip','txt'];
 const MAX_SIZE = 20 * 1024 * 1024; // 20MB
 
-let selectedFile = null;
+let selectedFiles = [];
 
 // 状態確認
 async function checkStatus() {
@@ -258,82 +283,109 @@ async function checkStatus() {
 const fileInput = document.getElementById('fileInput');
 const dropArea = document.getElementById('dropArea');
 
-fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+fileInput.addEventListener('change', () => addFiles(fileInput.files));
 
 dropArea.addEventListener('dragover', e => { e.preventDefault(); dropArea.classList.add('dragover'); });
 dropArea.addEventListener('dragleave', () => dropArea.classList.remove('dragover'));
 dropArea.addEventListener('drop', e => {
   e.preventDefault();
   dropArea.classList.remove('dragover');
-  setFile(e.dataTransfer.files[0]);
+  addFiles(e.dataTransfer.files);
 });
 
-function setFile(file) {
-  if (!file) return;
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (!ALLOWED_EXT.includes(ext)) {
-    showMsg('このファイル形式は使えません。', 'error');
-    return;
+function addFiles(files) {
+  for (const file of files) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!ALLOWED_EXT.includes(ext)) {
+      showMsg(`「${file.name}」は使えないファイル形式です。`, 'error');
+      continue;
+    }
+    if (file.size > MAX_SIZE) {
+      showMsg(`「${file.name}」が大きすぎます（20MB以内）`, 'error');
+      continue;
+    }
+    if (!selectedFiles.find(f => f.name === file.name)) {
+      selectedFiles.push(file);
+    }
   }
-  if (file.size > MAX_SIZE) {
-    showMsg('ファイルが大きすぎます（20MB以内）', 'error');
-    return;
-  }
-  selectedFile = file;
-  document.getElementById('fileName').textContent = '📄 ' + file.name;
+  renderFileList();
   updateBtn();
+}
+
+function removeFile(name) {
+  selectedFiles = selectedFiles.filter(f => f.name !== name);
+  renderFileList();
+  updateBtn();
+}
+
+function renderFileList() {
+  const list = document.getElementById('fileList');
+  if (selectedFiles.length === 0) { list.innerHTML = ''; return; }
+  list.innerHTML = selectedFiles.map(f => `
+    <div class="file-list-item">
+      <span>📄 ${f.name}</span>
+      <button class="remove-btn" onclick="removeFile('${f.name}')">✕</button>
+    </div>
+  `).join('');
 }
 
 document.getElementById('password').addEventListener('input', updateBtn);
 
 function updateBtn() {
   const pw = document.getElementById('password').value.trim();
-  document.getElementById('submitBtn').disabled = !(pw && selectedFile);
+  document.getElementById('submitBtn').disabled = !(pw && selectedFiles.length > 0);
 }
 
 // 投函
 async function submitFile() {
   const pw = document.getElementById('password').value.trim();
-  if (!pw || !selectedFile) return;
+  if (!pw || selectedFiles.length === 0) return;
 
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
-  btn.textContent = '送信中...';
 
   const progressWrap = document.getElementById('progressWrap');
   const progressBar = document.getElementById('progressBar');
   progressWrap.style.display = 'block';
-  progressBar.style.width = '30%';
 
-  try {
-    const base64 = await toBase64(selectedFile);
-    progressBar.style.width = '60%';
+  let successCount = 0;
+  let errorCount = 0;
 
-    const res = await fetch(GAS_URL, {
-      method: 'POST',
-      body: JSON.stringify({
-        action: 'upload',
-        password: pw,
-        fileName: selectedFile.name,
-        mimeType: selectedFile.type || 'application/octet-stream',
-        fileData: base64
-      })
-    });
+  for (let i = 0; i < selectedFiles.length; i++) {
+    const file = selectedFiles[i];
+    btn.textContent = `送信中... (${i+1}/${selectedFiles.length})`;
+    progressBar.style.width = Math.round((i / selectedFiles.length) * 90) + '%';
 
-    progressBar.style.width = '100%';
-    const data = await res.json();
-
-    if (data.ok) {
-      showMsg('✅ 提出しました！', 'success');
-      selectedFile = null;
-      fileInput.value = '';
-      document.getElementById('fileName').textContent = '';
-      document.getElementById('password').value = '';
-    } else {
-      showMsg('❌ ' + data.error, 'error');
+    try {
+      const base64 = await toBase64(file);
+      const res = await fetch(GAS_URL, {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'upload',
+          password: pw,
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          fileData: base64
+        })
+      });
+      const data = await res.json();
+      if (data.ok) successCount++;
+      else { errorCount++; showMsg('❌ ' + data.error, 'error'); break; }
+    } catch(e) {
+      errorCount++;
+      showMsg('❌ 送信に失敗しました。やり直してください。', 'error');
+      break;
     }
-  } catch(e) {
-    showMsg('❌ 送信に失敗しました。やり直してください。', 'error');
+  }
+
+  progressBar.style.width = '100%';
+
+  if (errorCount === 0) {
+    showMsg(`✅ ${successCount}件 提出しました！`, 'success');
+    selectedFiles = [];
+    fileInput.value = '';
+    renderFileList();
+    document.getElementById('password').value = '';
   }
 
   btn.disabled = false;
